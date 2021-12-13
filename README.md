@@ -80,6 +80,10 @@ For example,
     sh test.sh pascal split0_resnet50
 ```
 
+Results on 1-shot Pascal-5^i
+| Model              | Split-0 | Split-1 | Split-2 | Split-3 |  Mean | 
+|--------------------|---------|---------|---------|---------|-------|
+| CyCTR_resnet50     | 67.8    |  72.7   |  58.0   |  57.9   |  64.1 | 
 
 # Acknowledgement
 
