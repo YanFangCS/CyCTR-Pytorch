@@ -46,7 +46,7 @@ class CyCTR(nn.Module):
             nn.Dropout2d(p=drop_out),
         )
 
-        self.high_avg_pool = nn.AdaptiveAvgPool1d(reduce_dim)
+        self.high_avg_pool = nn.Identity()
 
         prior_channel = 1 
         self.qry_merge_feat = nn.Sequential(
@@ -64,7 +64,7 @@ class CyCTR(nn.Module):
                 nn.ReLU(inplace=True),
                 nn.Conv2d(reduce_dim, reduce_dim, kernel_size=1, bias=False)
             )
-            self.transformer = CyCTransformer(embed_dims=reduce_dim, num_points=9)
+            self.transformer = CyCTransformer(embed_dims=reduce_dim, shot=self.shot, num_points=9)
             self.merge_multi_lvl_reduce = nn.Sequential(
                     nn.Conv2d(reduce_dim*self.trans_multi_lvl, reduce_dim, kernel_size=1, padding=0, bias=False),
                     nn.ReLU(inplace=True),
@@ -138,7 +138,7 @@ class CyCTR(nn.Module):
         return repr_str
 
 
-    def forward(self, x, s_x=torch.FloatTensor(1,1,3,473,473).cuda(), s_y=torch.FloatTensor(1,1,473,473).cuda(), y=None):
+    def forward(self, x, s_x=torch.FloatTensor(1,1,3,473,473).cuda(), s_y=torch.FloatTensor(1,1,473,473).cuda(), y=None, padding_mask=None, s_padding_mask=None):
         batch_size, _, h, w = x.size()
         assert (h-1) % 8 == 0 and (w-1) % 8 == 0
         img_size = x.size()[-2:]
@@ -187,7 +187,7 @@ class CyCTR(nn.Module):
             aug_supp_feat = torch.cat(to_merge_fts, dim=1)
             aug_supp_feat = self.supp_merge_feat(aug_supp_feat)
 
-            query_feat_list = self.transformer(query_feat, y.float(), aug_supp_feat, s_y.clone().float())
+            query_feat_list = self.transformer(query_feat, padding_mask.float(), aug_supp_feat, s_y.clone().float(), s_padding_mask.float())
             fused_query_feat = []
             for lvl, qry_feat in enumerate(query_feat_list):
                 if lvl == 0:
@@ -251,11 +251,11 @@ class CyCTR(nn.Module):
             tmp_mask = F.interpolate(tmp_mask, size=(fts_size[0], fts_size[1]), mode='bilinear', align_corners=True)
 
             tmp_supp_feat = supp_feat_high[:,st,...] * tmp_mask               
-            q = self.high_avg_pool(query_feat_high.flatten(2).transpose(-2, -1))  # [bs, h*w, 256]
-            s = self.high_avg_pool(tmp_supp_feat.flatten(2).transpose(-2, -1))  # [bs, h*w, 256]
+            q = self.high_avg_pool(query_feat_high.flatten(2).transpose(-2, -1))  # [bs, h*w, c]
+            s = self.high_avg_pool(tmp_supp_feat.flatten(2).transpose(-2, -1))  # [bs, h*w, c]
 
             tmp_query = q
-            tmp_query = tmp_query.contiguous().permute(0, 2, 1)  # [bs, 256, h*w]
+            tmp_query = tmp_query.contiguous().permute(0, 2, 1)  # [bs, c, h*w]
             tmp_query_norm = torch.norm(tmp_query, 2, 1, True)
 
             tmp_supp = s               

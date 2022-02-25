@@ -11,7 +11,7 @@ TRAIN:
   train_h: 473
   train_w: 473
   val_size: 473
-  hidden_dims: 384
+  hidden_dims: 256 # DFattn friendly
   scale_min: 0.9  # minimum random scale
   scale_max: 1.1 # maximum random scale
   rotate_min: -10  # minimum random rotate

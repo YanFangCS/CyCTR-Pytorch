@@ -1,6 +1,9 @@
 # CyCTR-PyTorch
 This is a PyTorch re-implementation of NeurIPS 2021 paper "[Few-Shot Segmentation via Cycle-Consistent Transformer](https://proceedings.neurips.cc/paper/2021/file/b8b12f949378552c21f28deff8ba8eb6-Paper.pdf)".
 
+# News
+(Feb. 2022) Fix some bugs and update some results.
+
 # Usage
 
 ### Requirements
@@ -68,7 +71,6 @@ For example,
 ```
 
 ### Test Only
-+ Download checkpoints from [here](https://drive.google.com/drive/folders/1P3Qo7Zz_257z9gnVb7wroV7acaFYinkw?usp=sharing)
 + Modify `config` file (specify checkpoint path)
 + Run the following command: 
 ```
@@ -80,10 +82,26 @@ For example,
     sh test.sh pascal split0_resnet50
 ```
 
-Results on 1-shot Pascal-5^i
+Results on 1-shot Pascal-5^i with ResNet50 backbone ([checkpoints](https://drive.google.com/drive/folders/1fqIYfWz6vjxRsOrRGV5v9GpWAy1ZZ6Bo?usp=sharing))
 | Model              | Split-0 | Split-1 | Split-2 | Split-3 |  Mean | 
 |--------------------|---------|---------|---------|---------|-------|
-| CyCTR_resnet50     | 67.8    |  72.7   |  58.0   |  57.9   |  64.1 | 
+| CyCTR_resnet50     | 65.7    |  71.0   |  59.5   |  59.7   |  64.0 | 
+
+Results on 5-shot Pascal-5^i with ResNet50 backbone ([checkpoints](https://drive.google.com/drive/folders/1xD3PJKrnm2FnUlJjOBn8x0mv8GWvhFKW?usp=sharing))
+| Model              | Split-0 | Split-1 | Split-2 | Split-3 |  Mean | 
+|--------------------|---------|---------|---------|---------|-------|
+| CyCTR_resnet50     | 69.3     |  73.5   |  63.8   |  63.5  |  67.5 | 
+
+Results on 1-shot Pascal-5^i with ResNet101 backbone ([checkpoints](https://drive.google.com/drive/folders/1DRUz8NNukK5Aflt_uotihhom4XB7u4Bf?usp=sharing))
+| Model              | Split-0 | Split-1 | Split-2 | Split-3 |  Mean | 
+|--------------------|---------|---------|---------|---------|-------|
+| CyCTR_resnet50     | 67.2    |  71.1   |  57.6   |  59.0  |  63.7 | 
+     
+Results on 5-shot Pascal-5^i with ResNet101 backbone ([checkpoints](https://drive.google.com/drive/folders/1lU2KDOPeOibNXWEbMQ7O-euFBI134fx_?usp=sharing))
+| Model              | Split-0 | Split-1 | Split-2 | Split-3 |  Mean | 
+|--------------------|---------|---------|---------|---------|-------|
+| CyCTR_resnet50     | 71.0    |  75.0   |  58.5   |  65.0  |  67.4| 
+    
 
 # Acknowledgement
 

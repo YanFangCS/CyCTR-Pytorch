@@ -169,25 +169,27 @@ def validate(val_loader, model, criterion):
     end = time.time()
     if args.split != 999:
         if args.use_coco:
-            test_num = 20000
+            test_num = 5000
         else:
-            test_num = 5000 
+            test_num = 1000 
     else:
         test_num = len(val_loader)
     assert test_num % args.batch_size_val == 0    
     iter_num = 0
     total_time = 0
     for e in range(20):
-        for i, (input, target, s_input, s_mask, subcls, ori_label) in enumerate(val_loader):
+        for i, (input, target, s_input, s_mask, padding_mask, s_padding_mask, subcls, ori_label) in enumerate(val_loader):
             if (iter_num-1) * args.batch_size_val >= test_num:
                 break
             iter_num += 1    
             data_time.update(time.time() - end)
             input = input.cuda(non_blocking=True)
             target = target.cuda(non_blocking=True)
+            padding_mask = padding_mask.cuda(non_blocking=True)
+            s_padding_mask = s_padding_mask.cuda(non_blocking=True)
             ori_label = ori_label.cuda(non_blocking=True)
             start_time = time.time()
-            output = model(s_x=s_input, s_y=s_mask, x=input, y=target)
+            output = model(s_x=s_input, s_y=s_mask, x=input, y=target, padding_mask=padding_mask, s_padding_mask=s_padding_mask)
             total_time = total_time + 1
             model_time.update(time.time() - start_time)
 

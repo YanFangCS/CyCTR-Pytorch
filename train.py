@@ -242,7 +242,7 @@ def train(train_loader, model, optimizer, transformer_optimizer, epoch, base_lrs
     max_iter = args.epochs * len(train_loader)
     vis_key = 0
     print('Warmup: {}'.format(args.warmup))
-    for i, (input, target, s_input, s_mask, subcls) in enumerate(train_loader):
+    for i, (input, target, s_input, s_mask, padding_mask, s_padding_mask, subcls) in enumerate(train_loader):
         data_time.update(time.time() - end)
         current_iter = epoch * len(train_loader) + i + 1
         index_split = -1
@@ -251,10 +251,12 @@ def train(train_loader, model, optimizer, transformer_optimizer, epoch, base_lrs
 
         s_input = s_input.cuda(non_blocking=True)
         s_mask = s_mask.cuda(non_blocking=True)
+        padding_mask = padding_mask.cuda(non_blocking=True)
+        s_padding_mask = s_padding_mask.cuda(non_blocking=True)
         input = input.cuda(non_blocking=True)
         target = target.cuda(non_blocking=True)
         
-        output, main_loss, aux_loss = model(s_x=s_input, s_y=s_mask, x=input, y=target)
+        output, main_loss, aux_loss = model(s_x=s_input, s_y=s_mask, x=input, y=target, padding_mask=padding_mask, s_padding_mask=s_padding_mask)
 
         if not args.multiprocessing_distributed:
             main_loss, aux_loss = torch.mean(main_loss), torch.mean(aux_loss)
@@ -356,25 +358,27 @@ def validate(val_loader, model, criterion=nn.CrossEntropyLoss(ignore_index=255))
     end = time.time()
     if args.split != 999:
         if args.use_coco:
-            test_num = 20000
+            test_num = 5000
         else:
-            test_num = 5000 
+            test_num = 1000 
     else:
         test_num = len(val_loader)
     assert test_num % args.batch_size_val == 0    
     iter_num = 0
     total_time = 0
     for e in range(10):
-        for i, (input, target, s_input, s_mask, subcls, ori_label) in enumerate(val_loader):
+        for i, (input, target, s_input, s_mask, padding_mask, s_padding_mask, subcls, ori_label) in enumerate(val_loader):
             if (iter_num-1) * args.batch_size_val >= test_num:
                 break
             iter_num += 1    
             data_time.update(time.time() - end)
             input = input.cuda(non_blocking=True)
             target = target.cuda(non_blocking=True)
+            padding_mask = padding_mask.cuda(non_blocking=True)
+            s_padding_mask = s_padding_mask.cuda(non_blocking=True)
             ori_label = ori_label.cuda(non_blocking=True)
             start_time = time.time()
-            output = model(s_x=s_input, s_y=s_mask, x=input, y=target)
+            output = model(s_x=s_input, s_y=s_mask, x=input, y=target, padding_mask=padding_mask, s_padding_mask=s_padding_mask)
             total_time = total_time + 1
             model_time.update(time.time() - start_time)
 

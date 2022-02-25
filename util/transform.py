@@ -19,15 +19,15 @@ class Compose(object):
     def __init__(self, segtransform):
         self.segtransform = segtransform
 
-    def __call__(self, image, label):
+    def __call__(self, image, label, padding_mask=None):
         for t in self.segtransform:
-            image, label = t(image, label)
-        return image, label
+            image, label, padding_mask = t(image, label, padding_mask)
+        return image, label, padding_mask
 
 import time
 class ToTensor(object):
     # Converts numpy.ndarray (H x W x C) to a torch.FloatTensor of shape (C x H x W).
-    def __call__(self, image, label):
+    def __call__(self, image, label, padding_mask=None):
         if not isinstance(image, np.ndarray) or not isinstance(label, np.ndarray):
             raise (RuntimeError("segtransform.ToTensor() only handle np.ndarray"
                                 "[eg: data readed by cv2.imread()].\n"))
@@ -44,7 +44,12 @@ class ToTensor(object):
         label = torch.from_numpy(label)
         if not isinstance(label, torch.LongTensor):
             label = label.long()
-        return image, label
+        
+        if padding_mask is not None:
+            padding_mask = torch.from_numpy(padding_mask)
+            if not isinstance(padding_mask, torch.LongTensor):
+                padding_mask = padding_mask.long()
+        return image, label, padding_mask
 
 
 class Normalize(object):
@@ -57,14 +62,14 @@ class Normalize(object):
         self.mean = mean
         self.std = std
 
-    def __call__(self, image, label):
+    def __call__(self, image, label, padding_mask=None):
         if self.std is None:
             for t, m in zip(image, self.mean):
                 t.sub_(m)
         else:
             for t, m, s in zip(image, self.mean, self.std):
                 t.sub_(m).div_(s)
-        return image, label
+        return image, label, padding_mask
 
 
 class Resize(object):
@@ -72,7 +77,7 @@ class Resize(object):
     def __init__(self, size):
         self.size = size
 
-    def __call__(self, image, label):
+    def __call__(self, image, label, padding_mask=None):
 
         value_scale = 255
         mean = [0.485, 0.456, 0.406]
@@ -119,7 +124,16 @@ class Resize(object):
         back_crop_s_mask[:new_h, :new_w] = s_mask
         label = back_crop_s_mask
 
-        return image, label
+        if padding_mask is not None:
+            s_mask = padding_mask
+            new_h, new_w = find_new_hw(s_mask.shape[0], s_mask.shape[1], test_size)
+            #new_h, new_w = test_size, test_size
+            s_mask = cv2.resize(s_mask.astype(np.float32), dsize=(int(new_w), int(new_h)),interpolation=cv2.INTER_NEAREST)
+            back_crop_s_mask = np.ones((test_size, test_size)) * 255
+            back_crop_s_mask[:new_h, :new_w] = s_mask
+            padding_mask = back_crop_s_mask            
+
+        return image, label, padding_mask
 
 
 class test_Resize(object):
@@ -127,7 +141,7 @@ class test_Resize(object):
     def __init__(self, size):
         self.size = size
 
-    def __call__(self, image, label):
+    def __call__(self, image, label, padding_mask=None):
 
         value_scale = 255
         mean = [0.485, 0.456, 0.406]
@@ -176,7 +190,16 @@ class test_Resize(object):
         back_crop_s_mask[:new_h, :new_w] = s_mask
         label = back_crop_s_mask
 
-        return image, label
+        if padding_mask is not None:
+            s_mask = padding_mask
+            new_h, new_w = find_new_hw(s_mask.shape[0], s_mask.shape[1], test_size)
+            if new_w != s_mask.shape[0] or new_h != s_mask.shape[1]:
+                s_mask = cv2.resize(s_mask.astype(np.float32), dsize=(int(new_w), int(new_h)),interpolation=cv2.INTER_NEAREST)
+            back_crop_s_mask = np.ones((test_size, test_size)) * 255
+            back_crop_s_mask[:new_h, :new_w] = s_mask
+            padding_mask = back_crop_s_mask
+
+        return image, label, padding_mask
 
 
 class RandScale(object):
@@ -198,7 +221,7 @@ class RandScale(object):
         else:
             raise (RuntimeError("segtransform.RandScale() aspect_ratio param error.\n"))
 
-    def __call__(self, image, label):
+    def __call__(self, image, label, padding_mask=None):
         temp_scale = self.scale[0] + (self.scale[1] - self.scale[0]) * random.random()
         temp_aspect_ratio = 1.0
         if self.aspect_ratio is not None:
@@ -208,7 +231,9 @@ class RandScale(object):
         scale_factor_y = temp_scale / temp_aspect_ratio
         image = cv2.resize(image, None, fx=scale_factor_x, fy=scale_factor_y, interpolation=cv2.INTER_LINEAR)
         label = cv2.resize(label, None, fx=scale_factor_x, fy=scale_factor_y, interpolation=cv2.INTER_NEAREST)
-        return image, label
+        if padding_mask is not None:
+            padding_mask = cv2.resize(padding_mask, None, fx=scale_factor_x, fy=scale_factor_y, interpolation=cv2.INTER_NEAREST)
+        return image, label, padding_mask
 
 
 class Crop(object):
@@ -249,7 +274,7 @@ class Crop(object):
         else:
             raise (RuntimeError("ignore_label should be an integer number\n"))
 
-    def __call__(self, image, label):
+    def __call__(self, image, label, padding_mask=None):
         h, w = label.shape
 
         
@@ -262,9 +287,12 @@ class Crop(object):
                 raise (RuntimeError("segtransform.Crop() need padding while padding argument is None\n"))
             image = cv2.copyMakeBorder(image, pad_h_half, pad_h - pad_h_half, pad_w_half, pad_w - pad_w_half, cv2.BORDER_CONSTANT, value=self.padding)
             label = cv2.copyMakeBorder(label, pad_h_half, pad_h - pad_h_half, pad_w_half, pad_w - pad_w_half, cv2.BORDER_CONSTANT, value=self.ignore_label)
+            if padding_mask is not None:
+                padding_mask = cv2.copyMakeBorder(padding_mask, pad_h_half, pad_h - pad_h_half, pad_w_half, pad_w - pad_w_half, cv2.BORDER_CONSTANT, value=self.ignore_label)
         h, w = label.shape
         raw_label = label
         raw_image = image
+        raw_padding_mask = padding_mask
 
         if self.crop_type == 'rand':
             h_off = random.randint(0, h - self.crop_h)
@@ -274,12 +302,15 @@ class Crop(object):
             w_off = int((w - self.crop_w) / 2)
         image = image[h_off:h_off+self.crop_h, w_off:w_off+self.crop_w]
         label = label[h_off:h_off+self.crop_h, w_off:w_off+self.crop_w]
+        if padding_mask is not None:
+            padding_mask = padding_mask[h_off:h_off+self.crop_h, w_off:w_off+self.crop_w]
         raw_pos_num = np.sum(raw_label == 1)
         pos_num = np.sum(label == 1)
         crop_cnt = 0
         while(pos_num < 0.85*raw_pos_num and crop_cnt<=30):
             image = raw_image
             label = raw_label
+            padding_mask = raw_padding_mask
             if self.crop_type == 'rand':
                 h_off = random.randint(0, h - self.crop_h)
                 w_off = random.randint(0, w - self.crop_w)
@@ -288,18 +319,24 @@ class Crop(object):
                 w_off = int((w - self.crop_w) / 2)
             image = image[h_off:h_off+self.crop_h, w_off:w_off+self.crop_w]
             label = label[h_off:h_off+self.crop_h, w_off:w_off+self.crop_w]   
+            if padding_mask is not None:
+                padding_mask = padding_mask[h_off:h_off+self.crop_h, w_off:w_off+self.crop_w]   
             raw_pos_num = np.sum(raw_label == 1)
             pos_num = np.sum(label == 1)  
             crop_cnt += 1
         if crop_cnt >= 50:
             image = cv2.resize(raw_image, (self.size[0], self.size[0]), interpolation=cv2.INTER_LINEAR)
             label = cv2.resize(raw_label, (self.size[0], self.size[0]), interpolation=cv2.INTER_NEAREST)            
+            if padding_mask is not None:
+                padding_mask = cv2.resize(raw_padding_mask, (self.size[0], self.size[0]), interpolation=cv2.INTER_NEAREST)    
                                
         if image.shape != (self.size[0], self.size[0], 3):
             image = cv2.resize(image, (self.size[0], self.size[0]), interpolation=cv2.INTER_LINEAR)
             label = cv2.resize(label, (self.size[0], self.size[0]), interpolation=cv2.INTER_NEAREST)
+            if padding_mask is not None:
+                padding_mask = cv2.resize(padding_mask, (self.size[0], self.size[0]), interpolation=cv2.INTER_NEAREST)
 
-        return image, label
+        return image, label, padding_mask
 
 
 class RandRotate(object):
@@ -320,57 +357,63 @@ class RandRotate(object):
         self.ignore_label = ignore_label
         self.p = p
 
-    def __call__(self, image, label):
+    def __call__(self, image, label, padding_mask=None):
         if random.random() < self.p:
             angle = self.rotate[0] + (self.rotate[1] - self.rotate[0]) * random.random()
             h, w = label.shape
             matrix = cv2.getRotationMatrix2D((w / 2, h / 2), angle, 1)
             image = cv2.warpAffine(image, matrix, (w, h), flags=cv2.INTER_LINEAR, borderMode=cv2.BORDER_CONSTANT, borderValue=self.padding)
             label = cv2.warpAffine(label, matrix, (w, h), flags=cv2.INTER_NEAREST, borderMode=cv2.BORDER_CONSTANT, borderValue=self.ignore_label)
-        return image, label
+            if padding_mask is not None:
+                padding_mask = cv2.warpAffine(padding_mask, matrix, (w, h), flags=cv2.INTER_NEAREST, borderMode=cv2.BORDER_CONSTANT, borderValue=self.ignore_label)
+        return image, label, padding_mask
 
 
 class RandomHorizontalFlip(object):
     def __init__(self, p=0.5):
         self.p = p
 
-    def __call__(self, image, label):
+    def __call__(self, image, label, padding_mask=None):
         if random.random() < self.p:
             image = cv2.flip(image, 1)
             label = cv2.flip(label, 1)
-        return image, label
+            if padding_mask is not None:
+                padding_mask = cv2.flip(padding_mask, 1)
+        return image, label, padding_mask
 
 
 class RandomVerticalFlip(object):
     def __init__(self, p=0.5):
         self.p = p
 
-    def __call__(self, image, label):
+    def __call__(self, image, label, padding_mask=None):
         if random.random() < self.p:
             image = cv2.flip(image, 0)
             label = cv2.flip(label, 0)
-        return image, label
+            if padding_mask is not None:
+                padding_mask = cv2.flip(padding_mask, 0)
+        return image, label, padding_mask
 
 
 class RandomGaussianBlur(object):
     def __init__(self, radius=5):
         self.radius = radius
 
-    def __call__(self, image, label):
+    def __call__(self, image, label, padding_mask=None):
         if random.random() < 0.5:
             image = cv2.GaussianBlur(image, (self.radius, self.radius), 0)
-        return image, label
+        return image, label, padding_mask
 
 
 class RGB2BGR(object):
     # Converts image from RGB order to BGR order, for model initialized from Caffe
-    def __call__(self, image, label):
+    def __call__(self, image, label, padding_mask=None):
         image = cv2.cvtColor(image, cv2.COLOR_RGB2BGR)
-        return image, label
+        return image, label, padding_mask
 
 
 class BGR2RGB(object):
     # Converts image from BGR order to RGB order, for model initialized from Pytorch
-    def __call__(self, image, label):
+    def __call__(self, image, label, padding_mask=None):
         image = cv2.cvtColor(image, cv2.COLOR_BGR2RGB)
-        return image, label
+        return image, label, padding_mask

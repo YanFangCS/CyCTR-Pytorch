@@ -92,6 +92,7 @@ class SemData(Dataset):
         self.split = split  
         self.shot = shot
         self.data_root = data_root   
+        self.use_coco = use_coco
 
         if not use_coco:
             self.class_list = list(range(1, 21)) #[1,2,3,4,5,6,7,8,9,10,11,12,13,14,15,16,17,18,19,20]
@@ -163,6 +164,8 @@ class SemData(Dataset):
         image = np.float32(image)
         label = cv2.imread(label_path, cv2.IMREAD_GRAYSCALE)  
 
+        padding_mask = np.zeros_like(label)
+
         if image.shape[0] != label.shape[0] or image.shape[1] != label.shape[1]:
             raise (RuntimeError("Query Image & label shape mismatch: " + image_path + " " + label_path + "\n"))          
         label_class = np.unique(label).tolist()
@@ -211,6 +214,7 @@ class SemData(Dataset):
 
         support_image_list = []
         support_label_list = []
+        support_padding_list = []
         subcls_list = []
         for k in range(self.shot):  
             if self.mode == 'train':
@@ -229,16 +233,23 @@ class SemData(Dataset):
             support_label[target_pix[0],target_pix[1]] = 1 
             support_label[ignore_pix[0],ignore_pix[1]] = 255
             if support_image.shape[0] != support_label.shape[0] or support_image.shape[1] != support_label.shape[1]:
-                raise (RuntimeError("Support Image & label shape mismatch: " + support_image_path + " " + support_label_path + "\n"))            
+                raise (RuntimeError("Support Image & label shape mismatch: " + support_image_path + " " + support_label_path + "\n"))     
+
+            if not self.use_coco:
+                support_padding_label = np.zeros_like(support_label)
+                support_padding_label[support_label==255] = 255
+            else:
+                support_padding_label = np.zeros_like(support_label)
             support_image_list.append(support_image)
             support_label_list.append(support_label)
+            support_padding_list.append(support_padding_label)
         assert len(support_label_list) == self.shot and len(support_image_list) == self.shot                    
         
         raw_label = label.copy()
         if self.transform is not None:
-            image, label = self.transform(image, label)
+            image, label, padding_mask = self.transform(image, label, padding_mask)
             for k in range(self.shot):
-                support_image_list[k], support_label_list[k] = self.transform(support_image_list[k], support_label_list[k])
+                support_image_list[k], support_label_list[k], support_padding_list[k] = self.transform(support_image_list[k], support_label_list[k], support_padding_list[k])
 
         s_xs = support_image_list
         s_ys = support_label_list
@@ -249,8 +260,14 @@ class SemData(Dataset):
         for i in range(1, self.shot):
             s_y = torch.cat([s_ys[i].unsqueeze(0), s_y], 0)
 
+        if support_padding_list is not None:
+            s_eys = support_padding_list
+            s_ey = s_eys[0].unsqueeze(0)
+            for i in range(1, self.shot):
+                s_ey = torch.cat([s_eys[i].unsqueeze(0), s_ey], 0)   
+
         if self.mode == 'train':
-            return image, label, s_x, s_y, subcls_list
+            return image, label, s_x, s_y, padding_mask, s_ey, subcls_list
         else:
-            return image, label, s_x, s_y, subcls_list, raw_label
+            return image, label, s_x, s_y, padding_mask, s_ey, subcls_list, raw_label
 

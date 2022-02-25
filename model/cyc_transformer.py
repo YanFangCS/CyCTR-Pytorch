@@ -3,6 +3,7 @@ import torch.nn as nn
 import torch.nn.functional as F
 import cv2
 import math 
+import random
 from model.ops.modules import MSDeformAttn
 from model.positional_encoding import SinePositionalEncoding
 
@@ -57,7 +58,6 @@ class FFN(nn.Module):
 class MyCrossAttention(nn.Module):
     def __init__(self, dim, num_heads=1, qkv_bias=False, qk_scale=None, attn_drop=0., proj_drop=0.):
         super().__init__()
-        assert num_heads==1, "currently only implement num_heads==1"
         self.num_heads  = num_heads
         head_dim        = dim // num_heads
         self.scale      = qk_scale or head_dim ** -0.5
@@ -69,42 +69,56 @@ class MyCrossAttention(nn.Module):
         self.attn_drop  = nn.Dropout(attn_drop)
         self.proj       = nn.Linear(dim, dim, bias=False)
         self.proj_drop  = nn.Dropout(proj_drop)
+        self.ass_drop   = nn.Dropout(0.1)
 
         self.drop_prob = 0.1
 
 
     def forward(self, q, k, v, supp_valid_mask=None, supp_mask=None, cyc=True):
         B, N, C = q.shape
+        N_s = k.size(1)
 
-        q = self.q_fc(q)
+        q = self.q_fc(q).reshape(B, N, self.num_heads, C // self.num_heads).permute(0, 2, 1, 3)
     
-        k = self.k_fc(k)
-        v = self.v_fc(v)
-
-        attn = (q @ k.transpose(-2, -1)) * self.scale # [bs, n, n]
-
-        if supp_mask is not None and cyc==True:
-            k2q_sim_idx = attn.max(1)[1] # [bs, n]
-
-            q2k_sim_idx = attn.max(2)[1] # [bs, n]
-
-            re_map_idx = torch.gather(q2k_sim_idx, 1, k2q_sim_idx)
-            re_map_mask = torch.gather(supp_mask, 1, re_map_idx)
-            
-            association = (supp_mask == re_map_mask).to(attn.device) # [bs, n], True means matched position in supp
-           
-
-        if cyc:
-            supp_valid_mask[association==False] = 1.
+        k = self.k_fc(k).reshape(B, N_s, self.num_heads, C // self.num_heads).permute(0, 2, 1, 3)
+        v = self.v_fc(v).reshape(B, N_s, self.num_heads, C // self.num_heads).permute(0, 2, 1, 3)
 
         if supp_valid_mask is not None:
-            supp_valid_mask = supp_valid_mask.unsqueeze(1).float()
+            supp_valid_mask = supp_valid_mask.unsqueeze(1).repeat(1, self.num_heads, 1) # [bs, nH, n]
+
+        attn = (q @ k.transpose(-2, -1)) * self.scale # [bs, nH, n, n]
+
+        if supp_mask is not None and cyc==True:
+            association = []
+            for hd_id in range(self.num_heads):
+                attn_single_hd = attn[:, hd_id, ...]
+                k2q_sim_idx = attn_single_hd.max(1)[1] # [bs, n]
+
+                q2k_sim_idx = attn_single_hd.max(2)[1] # [bs, n]
+
+                re_map_idx = torch.gather(q2k_sim_idx, 1, k2q_sim_idx)
+                re_map_mask = torch.gather(supp_mask, 1, re_map_idx)
+
+                asso_single_head = (supp_mask == re_map_mask).to(attn.device) # [bs, n], True means matched position in supp
+                association.append(asso_single_head.unsqueeze(1))
+            association = torch.cat(association, dim=1) # [bs, nH, ns]
+
+        if cyc:
+            inconsistent = ~association
+            inconsistent = inconsistent.float()
+            inconsistent = self.ass_drop(inconsistent)
+            supp_valid_mask[inconsistent>0] = 1.
+            
+
+        if supp_valid_mask is not None:
+            supp_valid_mask = supp_valid_mask.unsqueeze(-2).float() # [bs, nH, 1, ns]
             supp_valid_mask = supp_valid_mask * -10000.0
-            attn = attn + supp_valid_mask        
+            attn = attn + supp_valid_mask       
+
         attn = attn.softmax(dim=-1)
         attn = self.attn_drop(attn)
 
-        x = (attn @ v)
+        x = (attn @ v).transpose(1, 2).reshape(B, N, C)
         x = self.proj(x)
         x = self.proj_drop(x)
         
@@ -114,7 +128,7 @@ class MyCrossAttention(nn.Module):
 class CyCTransformer(nn.Module):
     def __init__(self,
                  embed_dims=384, 
-                 num_heads=1, 
+                 num_heads=8, 
                  num_layers=2,
                  num_levels=1,
                  num_points=9,
@@ -136,6 +150,7 @@ class CyCTransformer(nn.Module):
         self.shot                   = shot
         self.use_cross              = True
         self.use_self               = True
+        self.use_cyc                = True
         
         self.rand_fg_num = rand_fg_num * shot
         self.rand_bg_num = rand_bg_num * shot
@@ -148,7 +163,7 @@ class CyCTransformer(nn.Module):
         for l_id in range(self.num_layers):
             if self.use_cross:
                 self.cross_layers.append(
-                    MyCrossAttention(embed_dims, attn_drop=self.dropout, proj_drop=self.dropout),
+                    MyCrossAttention(embed_dims, num_heads=12 if embed_dims%12==0 else self.num_heads, attn_drop=self.dropout, proj_drop=self.dropout),
                 )
                 self.layer_norms.append(nn.LayerNorm(embed_dims))
                 if self.use_ffn:
@@ -157,7 +172,7 @@ class CyCTransformer(nn.Module):
             
             if self.use_self:
                 self.qry_self_layers.append(
-                    MSDeformAttn(embed_dims, num_levels, num_heads, num_points)
+                    MSDeformAttn(embed_dims, num_levels, 12 if embed_dims%12==0 else self.num_heads, num_points)
                 )
                 self.layer_norms.append(nn.LayerNorm(embed_dims))
 
@@ -243,19 +258,22 @@ class CyCTransformer(nn.Module):
         
         return src_flatten, qry_valid_masks_flatten, pos_embed_flatten, spatial_shapes, level_start_index
 
-    def get_supp_flatten_input(self, s_x, supp_mask):
+    def get_supp_flatten_input(self, s_x, supp_mask, s_padding_mask):
         s_x_flatten = []
         supp_valid_mask = []
         supp_obj_mask = []
         supp_mask = F.interpolate(supp_mask, size=s_x.shape[-2:], mode='nearest').squeeze(1) # [bs*shot, h, w]
         supp_mask = supp_mask.view(-1, self.shot, s_x.size(2), s_x.size(3))
+
+        s_padding_mask = F.interpolate(s_padding_mask, size=s_x.shape[-2:], mode='nearest').squeeze(1) # [bs*shot, h, w]
+        s_padding_mask = s_padding_mask.view(-1, self.shot, s_x.size(2), s_x.size(3))
         s_x = s_x.view(-1, self.shot, s_x.size(1), s_x.size(2), s_x.size(3))
 
         for st_id in range(s_x.size(1)):
             supp_valid_mask_s = []
             supp_obj_mask_s = []
             for img_id in range(s_x.size(0)):
-                supp_valid_mask_s.append(supp_mask[img_id, st_id, ...]==255)
+                supp_valid_mask_s.append(s_padding_mask[img_id, st_id, ...]==255)
                 obj_mask = supp_mask[img_id, st_id, ...]==1
                 if obj_mask.sum() == 0: # To avoid NaN
                     obj_mask[obj_mask.size(0)//2-1:obj_mask.size(0)//2+1, obj_mask.size(1)//2-1:obj_mask.size(1)//2+1] = True
@@ -284,6 +302,15 @@ class CyCTransformer(nn.Module):
         return s_x_flatten, supp_valid_mask, supp_mask_flatten
 
     def sparse_sampling(self, s_x, supp_mask, supp_valid_mask):
+        if self.training:
+            scale_min = 0.6
+            scale_max = 4.0 if self.shot==1 else 1.4
+            sampling_scale = random.uniform(scale_min, scale_max)
+            rand_fg_num = int(self.rand_fg_num*sampling_scale)
+            rand_bg_num = int(self.rand_bg_num*sampling_scale)
+        else:
+            rand_fg_num = self.rand_fg_num
+            rand_bg_num = self.rand_bg_num
         assert supp_mask is not None
         re_arrange_k = []
         re_arrange_mask = []
@@ -296,23 +323,23 @@ class CyCTransformer(nn.Module):
             fg_k = k_b[supp_mask_b] # [num_fg, c]
             bg_k = k_b[supp_mask_b==False] # [num_bg, c]
 
-            if num_fg<self.rand_fg_num:
-                rest_num = self.rand_fg_num+self.rand_bg_num-num_fg
+            if num_fg<rand_fg_num:
+                rest_num = rand_fg_num+rand_bg_num-num_fg
                 bg_select_idx = torch.randperm(num_bg)[:rest_num]                
                 re_k = torch.cat([fg_k, bg_k[bg_select_idx]], dim=0)
                 re_mask = torch.cat([supp_mask_b[supp_mask_b==True], supp_mask_b[bg_select_idx]], dim=0)
                 re_valid_mask = torch.cat([supp_valid_mask[b_id][supp_mask_b==True], supp_valid_mask[b_id][bg_select_idx]], dim=0)
 
-            elif num_bg<self.rand_bg_num:
-                rest_num = self.rand_fg_num+self.rand_bg_num-num_bg
+            elif num_bg<rand_bg_num:
+                rest_num = rand_fg_num+rand_bg_num-num_bg
                 fg_select_idx = torch.randperm(num_fg)[:rest_num]
                 re_k = torch.cat([fg_k[fg_select_idx], bg_k], dim=0)
                 re_mask = torch.cat([supp_mask_b[fg_select_idx], supp_mask_b[supp_mask_b==False]], dim=0)
                 re_valid_mask = torch.cat([supp_valid_mask[b_id][fg_select_idx], supp_valid_mask[b_id][supp_mask_b==False]], dim=0)
                 
             else:
-                fg_select_idx = torch.randperm(num_fg)[:self.rand_fg_num]
-                bg_select_idx = torch.randperm(num_bg)[:self.rand_bg_num]
+                fg_select_idx = torch.randperm(num_fg)[:rand_fg_num]
+                bg_select_idx = torch.randperm(num_bg)[:rand_bg_num]
                 re_k = torch.cat([fg_k[fg_select_idx], bg_k[bg_select_idx]], dim=0)
                 re_mask = torch.cat([supp_mask_b[fg_select_idx], supp_mask_b[bg_select_idx]], dim=0)
                 re_valid_mask = torch.cat([supp_valid_mask[b_id][fg_select_idx], supp_valid_mask[b_id][bg_select_idx]], dim=0)
@@ -327,7 +354,7 @@ class CyCTransformer(nn.Module):
 
         return k, supp_mask, supp_valid_mask
 
-    def forward(self, x, qry_masks, s_x, supp_mask):
+    def forward(self, x, qry_masks, s_x, supp_mask, s_padding_mask):
         if not isinstance(x, list):
             x = [x]
         if not isinstance(qry_masks, list):
@@ -338,7 +365,7 @@ class CyCTransformer(nn.Module):
 
         x_flatten, qry_valid_masks_flatten, pos_embed_flatten, spatial_shapes, level_start_index = self.get_qry_flatten_input(x, qry_masks)
 
-        s_x, supp_valid_mask, supp_mask_flatten = self.get_supp_flatten_input(s_x, supp_mask.clone())
+        s_x, supp_valid_mask, supp_mask_flatten = self.get_supp_flatten_input(s_x, supp_mask.clone(), s_padding_mask.clone())
 
         reference_points = self.get_reference_points(spatial_shapes, device=x_flatten.device)
 
@@ -362,7 +389,8 @@ class CyCTransformer(nn.Module):
             if self.use_cross:
                 k, sampled_mask, sampled_valid_mask = self.sparse_sampling(s_x, supp_mask_flatten, supp_valid_mask) if self.training or l_id==0 else (k, sampled_mask, sampled_valid_mask)
                 v = k.clone()
-                cross_out = self.cross_layers[l_id](q, k, v, sampled_valid_mask, sampled_mask)
+                cross_out = self.cross_layers[l_id](q, k, v, sampled_valid_mask, sampled_mask, cyc=self.use_cyc)
+
                 q = cross_out + q
                 q = self.layer_norms[ln_id](q)
                 ln_id += 1
