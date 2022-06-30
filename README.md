@@ -112,9 +112,11 @@ This project is built upon [PFENet](https://github.com/dvlab-research/PFENet) an
 If you find our codes or models useful, please consider to give us a star or cite with:
 ```
 @article{zhang2021few,
-  title={Few-Shot Segmentation via Cycle-Consistent Transformer},
-  author={Zhang, Gengwei and Kang, Guoliang and Wei, Yunchao and Yang, Yi},
-  journal={arXiv preprint arXiv:2106.02320},
+  title={Few-shot segmentation via cycle-consistent transformer},
+  author={Zhang, Gengwei and Kang, Guoliang and Yang, Yi and Wei, Yunchao},
+  journal={Advances in Neural Information Processing Systems},
+  volume={34},
+  pages={21984--21996},
   year={2021}
 }
 ```
